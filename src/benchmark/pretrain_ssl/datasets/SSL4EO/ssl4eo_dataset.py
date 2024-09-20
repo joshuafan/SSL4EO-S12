@@ -101,9 +101,9 @@ class SSL4EO(torch.utils.data.Dataset):
                     ch = dataset.read(1)
                     ch = cv2.resize(ch, dsize=(264, 264), interpolation=cv2.INTER_LINEAR_EXACT) # [264,264]
                     #coord = dataset.xy(0,0) # up left
-                    if self.normalize or (self.dtype=='uint8' and mode=='s1'):
+                    if self.normalize:  #  or (self.dtype=='uint8' and mode=='s1'):  @joshuafan: uint8 data is already normalized
                         ch = normalize(ch, MEAN[i], STD[i])
-                        
+
                 chs.append(ch)
             img = np.stack(chs, axis=0) # [C,264,264]
             seasons.append(img)
@@ -112,10 +112,11 @@ class SSL4EO(torch.utils.data.Dataset):
         if self.normalize:
             return img_4s
         elif self.dtype=='uint8':
-            if mode=='s1':
-                return img_4s
-            else:
-                return (img_4s / 10000.0 * 255.0).astype('uint8')
+            return img_4s
+            # if mode=='s1':
+            #     return img_4s
+            # else:
+            #     return (img_4s / 10000.0 * 255.0).astype('uint8')
         else:
             if mode=='s1':                    
                 return img_4s.astype('float32')
@@ -183,9 +184,18 @@ class InfiniteDataLoader(DataLoader):
 def make_lmdb(dataset, lmdb_file, num_workers=6,mode=['s1','s2a','s2c']):
     loader = InfiniteDataLoader(dataset, num_workers=num_workers, collate_fn=lambda x: x[0])
     #env = lmdb.open(lmdb_file, map_size=1099511627776,writemap=True) # continuously write to disk
-    env = lmdb.open(lmdb_file, map_size=1099511627776)
+    env = lmdb.open(lmdb_file, map_size=1099511627776*2)
     txn = env.begin(write=True)
     for index, (s1, s2a, s2c) in tqdm(enumerate(loader), total=len(dataset), desc='Creating LMDB'):
+        if index == 0:  # and mode == ['s1', 's2a', 's2c']:
+            print("Datatype check")  # Should be [season, C, H, W]
+            if 's1' in mode:
+                print("S1", s1.shape, s1.dtype, s1.min(), s1.mean(), s1.max())
+            if 's2a' in mode:
+                print("S2a", s2a.shape, s2a.dtype, s2a.min(), s2a.mean(), s2a.max())
+            if 's2c' in mode:
+                print("S2c", s2c.shape, s2c.dtype, s2c.min(), s2c.mean(), s2c.max())
+
         if 's1' in mode:
             sample_s1 = np.array(s1)
         if 's2a' in mode:
@@ -195,6 +205,8 @@ def make_lmdb(dataset, lmdb_file, num_workers=6,mode=['s1','s2a','s2c']):
             
         if mode==['s1','s2a','s2c']:
             obj = (sample_s1.tobytes(), sample_s1.shape, sample_s2a.tobytes(), sample_s2a.shape, sample_s2c.tobytes(), sample_s2c.shape)
+        elif mode==['s1', 's2c']:
+            obj = (sample_s1.tobytes(), sample_s1.shape, sample_s2c.tobytes(), sample_s2c.shape)
         elif mode==['s1']:
             obj = (sample_s1.tobytes(), sample_s1.shape)
         elif mode==['s2a']:

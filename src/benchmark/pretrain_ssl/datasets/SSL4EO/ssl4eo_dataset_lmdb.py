@@ -162,7 +162,7 @@ class LMDBDataset(Dataset):
         if self.mode==['s1']:
             s1_bytes, s1_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape)
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
             else:
                 sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
             if self.s1_transform is not None:
@@ -173,54 +173,69 @@ class LMDBDataset(Dataset):
         if self.mode==['s2a']:
             s2a_bytes, s2a_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape)
+                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape).astype(np.float32) / 255.0
             else:
                 sample_s2a = np.frombuffer(s2a_bytes, dtype=np.int16).reshape(s2a_shape)
                 sample_s2a = (sample_s2a / 10000.0).astype(np.float32)
             if self.s2a_transform is not None:
                 sample_s2a = self.s2a_transform(sample_s2a)
             return sample_s2a
-        
+
         ## s2c
         if self.mode==['s2c']:
             s2c_bytes, s2c_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape)
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
             else:
                 sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
                 sample_s2c = (sample_s2c / 10000.0).astype(np.float32)
             if self.s2c_transform is not None:
                 sample_s2c = self.s2c_transform(sample_s2c)
             return sample_s2c
-    
+
+       ## s1, s2c [most comparable to ponds]
+        if self.mode==['s1', 's2c']:    
+            s1_bytes, s1_shape, s2c_bytes, s2c_shape = pickle.loads(data)
+
+            if self.dtype=='uint8':
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
+            else:
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
+                sample_s2c = (sample_s2c / 10000.0).astype(np.float32)
+
+            if self.s1_transform is not None:
+                sample_s1 = self.s1_transform(sample_s1)
+            if self.s2c_transform is not None:
+                sample_s2c = self.s2c_transform(sample_s2c)                
+
+            return sample_s1, sample_s2c
+
         ## s1, s2a, s2c [TBD, for 50k subset experiments]
         if self.mode==['s1','s2a','s2c']:    
             s1_bytes, s1_shape, s2a_bytes, s2a_shape, s2c_bytes, s2c_shape = pickle.loads(data)
-            '''
             if self.dtype=='uint8':
-                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape)
-                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape)
-                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape)
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
+                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape).astype(np.float32) / 255.0
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
+                # sample_s2a = (sample_s2a * 255).astype(np.uint8)
+                # sample_s2c = (sample_s2c * 255).astype(np.uint8)
             else:
-            '''
-            sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
-            sample_s2a = np.frombuffer(s2a_bytes, dtype=np.int16).reshape(s2a_shape)
-            sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
+                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.int16).reshape(s2a_shape)
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
+                sample_s2a = (sample_s2a / 10000.0).astype(np.float32)
+                sample_s2c = (sample_s2c / 10000.0).astype(np.float32)
 
-            #sample_s1 = sample_s1.astype(np.float32)
-            #sample_s2a = (sample_s2a / 10000.0).astype(np.float32)
-            #sample_s2c = (sample_s2c / 10000.0).astype(np.float32)
-            
-            #if self.dtype=='uint8':
-            #    sample_s2c = (sample_s2c * 255).astype(np.uint8)
-            
+            # print("Before transforms", sample_s1.dtype, sample_s2a.dtype, sample_s2c.dtype, sample_s2c.shape)
             if self.s1_transform is not None:
                 sample_s1 = self.s1_transform(sample_s1)
             if self.s2a_transform is not None:
                 sample_s2a = self.s2a_transform(sample_s2a)
             if self.s2c_transform is not None:
                 sample_s2c = self.s2c_transform(sample_s2c)                
-
+            # print("After", sample_s1[0].dtype, sample_s2a[0].dtype, sample_s2c[0].dtype, sample_s2c[0].shape)
             return sample_s1, sample_s2a, sample_s2c
             #return sample_s2c
     
@@ -374,14 +389,16 @@ if __name__ == '__main__':
     
     train_dataset = LMDBDataset(
         #lmdb_file='/p/scratch/hai_dm4eo/wang_yi/data/ssl4eo_50k.lmdb',
-        lmdb_file='/p/scratch/hai_ssl4eo/data/ssl4eo_s12/ssl4eo_250k_s2c_uint8.lmdb',
-        #s1_transform=TwoCropsTransform(train_transforms_s1),
-        #s2a_transform=TwoCropsTransform(train_transforms_s2a),
+        # lmdb_file='/p/scratch/hai_ssl4eo/data/ssl4eo_s12/ssl4eo_250k_s2c_uint8.lmdb',
+        lmdb_file='/mnt/beegfs/bulk/mirror/jyf6/datasets/geospatial/datasets/SSL4EO/0k_251k_uint8_jpeg_tif/ssl4eo_251k_s2c_uint8.lmdb',
+
+        s1_transform=TwoCropsTransform(train_transforms_s1),
+        s2a_transform=TwoCropsTransform(train_transforms_s2a),
         s2c_transform=TwoCropsTransform(train_transforms_s2c,season='augment'),
         is_slurm_job=False,
         #subset=True,
         normalize = False,
-        mode = ['s2c'],
+        mode = ['s1', 's2a', 's2c'],
         dtype='uint8'
     )
 

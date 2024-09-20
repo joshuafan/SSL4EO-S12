@@ -6,6 +6,7 @@ import math
 import os
 import random
 import shutil
+import sys
 import time
 import warnings
 import numpy as np
@@ -33,6 +34,10 @@ from torch.utils.tensorboard import SummaryWriter
 #from datasets.BigEarthNet.bigearthnet_dataset_seco_lmdb import LMDBDataset
 from datasets.SSL4EO.ssl4eo_dataset_lmdb import LMDBDataset
 #from models.rs_transforms_uint8 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
+
+# Try fixing this error https://stackoverflow.com/questions/59809785/i-get-a-attributeerror-module-collections-has-no-attribute-iterable-when-i
+import collections
+collections.Iterable = collections.abc.Iterable
 from cvtorchvision import cvtransforms
 #from torchsat.transforms import transforms_cls
 
@@ -118,6 +123,7 @@ parser.add_argument('--cos', action='store_true',
                     help='use cosine lr schedule')
 
 parser.add_argument('--normalize', action='store_true', default=False)
+parser.add_argument('--subset', action='store_true', default=False)
 parser.add_argument('--mode', nargs='*', default=['s2c'])
 parser.add_argument('--dtype', type=str, default='uint8')
 parser.add_argument('--season', type=str, default='augment')
@@ -155,6 +161,7 @@ class TwoCropsTransform:
 
 
 def main():
+    print("Main pretrain")
 
     args = parser.parse_args()
 
@@ -182,6 +189,7 @@ def main():
         warnings.warn('You have chosen a specific GPU. This will completely '
                       'disable data parallelism.')
 
+    # @joshuafan temporarily removed
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
@@ -198,6 +206,19 @@ def main():
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
 
     ngpus_per_node = torch.cuda.device_count()
+
+    # @joshuafan added: If not using distributed mode (only 1 GPU), set "args.gpu" to the GPU that we have
+    print("Num gpus:", ngpus_per_node, "CUDA_VISIBLE_DEVICES", os.environ["CUDA_VISIBLE_DEVICES"])
+    if not args.distributed:
+        gpus = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+        assert len(gpus) == 1, f"There are multiple GPUs {gpus}, but args.distributed is False!"
+        args.gpu = int(gpus[0])  #f"cuda:{gpus[0]}"
+
+    # Otherwise if using distributed, delete the communication file first if it exists
+    if os.path.isfile(args.dist_url.removeprefix('file://')):
+        os.remove(args.dist_url.removeprefix('file://'))
+        print("File existed", args.dist_url.removeprefix('file://'))
+
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -210,17 +231,20 @@ def main():
         main_worker(args.gpu, ngpus_per_node, args)
 
 
-def main_worker(gpu, ngpus_per_node, args):
+def main_worker(gpu_num, ngpus_per_node, args):
+    gpu = int(os.environ["CUDA_VISIBLE_DEVICES"].split(",")[gpu_num])  #  gpu  @joshuafan changed
     args.gpu = gpu
 
     # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0 or (args.is_slurm_job and args.rank != 0):
-        def print_pass(*args):
-            pass
-        builtins.print = print_pass
+        print("Got inside the if statement", gpu, args.rank)
+        # def print_pass(*args):
+        #     pass
+        # builtins.print = print_pass
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
+        sys.stdout.flush()
 
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
@@ -229,35 +253,47 @@ def main_worker(gpu, ngpus_per_node, args):
             # For multiprocessing distributed training, rank needs to be the
             # global rank among all the processes
             args.rank = args.rank * ngpus_per_node + gpu
+
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-    
+
+    print("gpu_num", gpu_num, "gpu", args.gpu, "cudavisibledevices",  os.environ["CUDA_VISIBLE_DEVICES"], "args.rank", args.rank)
+
     # create tb_writer
     if args.rank==0 and not os.path.isdir(args.checkpoints):
         os.makedirs(args.checkpoints, exist_ok=True)
     if args.rank==0:
         tb_writer = SummaryWriter(os.path.join(args.checkpoints,'log'))    
-        
+
     # create model
     print("=> creating model '{}'".format(args.arch))
     model = builder.MoCo(
         models.__dict__[args.arch],
-        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp, bands=args.bands)
+        args.moco_dim, args.moco_k, args.moco_m, args.moco_t, args.mlp, bands=args.bands, distributed=args.distributed)
     
     print('model created.')
+    sys.stdout.flush()
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.
+        print("Distributed")
 
         ### add slurm option ###
-        if args.is_slurm_job:            
+        if args.is_slurm_job:
             args.gpu_to_work_on = args.rank % torch.cuda.device_count()
+            print("Slurm job", args.gpu_to_work_on)
+            sys.stdout.flush()
             torch.cuda.set_device(args.gpu_to_work_on)
+            print("torch cuda set device", args.gpu_to_work_on)
+            sys.stdout.flush()
             model.cuda()
-            model = nn.parallel.DistributedDataParallel(model,device_ids=[args.gpu_to_work_on])   
-            print('model distributed.')          
+            print("model.cuda() finished")
+            sys.stdout.flush()
+            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu_to_work_on], output_device=[args.gpu_to_work_on])   
+            print('model distributed.')
+            sys.stdout.flush()     
         elif args.gpu is not None:
             torch.cuda.set_device(args.gpu)
             model.cuda(args.gpu)
@@ -267,16 +303,19 @@ def main_worker(gpu, ngpus_per_node, args):
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            print('model distributed but slurm job was not set')
         else:
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
             # available GPUs if device_ids are not set
             model = torch.nn.parallel.DistributedDataParallel(model)
+            print('distributed, but not slurm job and gpu is none')
     elif args.gpu is not None:
+        print('not distributed, gpu', args.gpu)
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
         # comment out the following line for debugging
-        raise NotImplementedError("Only DistributedDataParallel is supported.")
+        # raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
         # AllGather implementation (batch shuffle, queue update, etc.) in
         # this code only supports DistributedDataParallel.
@@ -314,16 +353,25 @@ def main_worker(gpu, ngpus_per_node, args):
     
     lmdb = args.lmdb
     
-    if args.bands == 'B13':    
+    if args.bands == 'B13':
         n_channels = 13
     elif args.bands == 'B12':
         n_channels = 12
 
-    if args.dtype=='uint8':
-        from models.rs_transforms_uint8 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
+    # If also using Sentinel-1, add 2 bands
+    if args.mode == ["s1", "s2c"]:
+        n_channels += 2
     else:
-        from models.rs_transforms_float32 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
-        
+        assert args.mode == ["s2c"], "We assume the mode is just `s2c`"
+
+    # if args.dtype=='uint8':
+    #     from models.rs_transforms_uint8 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
+    # else:
+    #     from models.rs_transforms_float32 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
+    # @joshuafan even with uint8 data, we now convert to float32 before transforms. This is because Kornia
+    # transforms can only be used with float data.
+    from models.rs_transforms_float32 import RandomChannelDrop,RandomBrightness,RandomContrast,ToGray
+
     train_transforms = cvtransforms.Compose([
         #cvtransforms.Resize(128),
         cvtransforms.RandomResizedCrop(args.in_size, scale=(0.2, 1.)),
@@ -341,11 +389,13 @@ def main_worker(gpu, ngpus_per_node, args):
 
     train_dataset = LMDBDataset(
         lmdb_file=args.data,
+        s1_transform=TwoCropsTransform(train_transforms,season=args.season),
         s2c_transform=TwoCropsTransform(train_transforms,season=args.season),
         is_slurm_job=args.is_slurm_job,
         normalize=args.normalize,
         dtype=args.dtype,
-        mode=args.mode
+        mode=args.mode,
+        subset=args.subset
     )   
     
         
@@ -359,6 +409,8 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=args.is_slurm_job, sampler=train_sampler, drop_last=True)
 
     print('start training...')
+    sys.stdout.flush()
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -400,8 +452,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    for i, s2c in enumerate(train_loader):
-        images = s2c
+    for i, images in enumerate(train_loader):
+        if type(images) is tuple:
+            # If using both S1 and S2C, concatenate the images along the channel dimension for now
+            images = torch.concatenate(images, dim=1)  # [batch, channel, height, width]
+            # print("Concatenated image shape", images.shape)
+
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -410,7 +466,10 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output
+        # print("images shape", images[0].shape, images[1].shape)
         output, target = model(im_q=images[0], im_k=images[1])
+        # print("output", output.shape, "target", target.shape)
+        # sys.stdout.flush()
         loss = criterion(output, target)
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy

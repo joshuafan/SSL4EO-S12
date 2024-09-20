@@ -2,6 +2,7 @@ import pickle
 
 import numpy as np
 from PIL import Image
+import torch
 from torch.utils.data import Dataset, DataLoader
 import lmdb
 from tqdm import tqdm
@@ -135,11 +136,11 @@ class LMDBDataset(Dataset):
             data = txn.get(str(index).encode())
 
         #sample_s2_bytes, sample_s2_shape, sample_s1_bytes, sample_s1_shape, target_bytes = pickle.loads(data)
-        sample_s2_bytes, sample_s2_shape, target_bytes = pickle.loads(data)
-        sample = np.frombuffer(sample_s2_bytes, dtype=np.uint8).reshape(sample_s2_shape)
+        sample_s2_bytes, sample_s2_shape, target_bytes = pickle.loads(data)  # Shape should be [128, 128, 12] (H,W,C)
+        sample = np.frombuffer(sample_s2_bytes, dtype=np.int16).reshape(sample_s2_shape).copy()  # TODO check that int16 is correct  @joshuafan - changed to int16, copied to new writable array
         #sample_s1 = np.frombuffer(sample_s1_bytes, dtype=np.float32).reshape(sample_s1_shape)
 
-        target = np.frombuffer(target_bytes, dtype=np.float32)
+        target = np.frombuffer(target_bytes, dtype=np.float32).copy()  # dtype=np.float32).copy()  # TODO check this @joshuafan changed to int
 
         if self.transform is not None:
             sample = self.transform(sample)
@@ -156,6 +157,8 @@ if __name__ == '__main__':
     import time
     import torch
     from torchvision import transforms
+    import collections
+    collections.Iterable = collections.abc.Iterable
     from cvtorchvision import cvtransforms
     import cv2
     import random
@@ -180,7 +183,7 @@ if __name__ == '__main__':
     train_transforms = cvtransforms.Compose(augmentation)
     
     train_dataset = LMDBDataset(
-        lmdb_file=os.path.join(args.data_dir, 'train_B12_B2.lmdb'),
+        lmdb_file=os.path.join(args.data_dir, 'train_B12.lmdb'),  # 'train_B12_B2.lmdb'),
         transform=train_transforms
     )
 

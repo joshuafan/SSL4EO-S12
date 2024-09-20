@@ -6,6 +6,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import models
 
 ## change01 ##
+import collections
+collections.Iterable = collections.abc.Iterable  # @joshuafan - temporary workaround for deprecated library https://github.com/quandyfactory/dicttoxml/issues/91
 from cvtorchvision import cvtransforms
 import time
 import os
@@ -185,9 +187,11 @@ def main():
 
     ## change 04 ##
     if args.backbone == 'resnet50':
+        # net = models.__dict__[args.backbone](num_classes=128)
         net = models.resnet50(pretrained=False)
         net.fc = torch.nn.Linear(2048,10)
     elif args.backbone == 'resnet18':
+        # net = models.__dict__[args.backbone](num_classes=128)
         net = models.resnet18(pretrained=False)
         net.fc = torch.nn.Linear(512,10)
     if args.bands=='B13':    
@@ -199,7 +203,6 @@ def main():
     for name, param in net.named_parameters():
         if name not in ['fc.weight','fc.bias']:
             param.requires_grad = False
-    
 
     net.fc.weight.data.normal_(mean=0.0,std=0.01)
     net.fc.bias.data.zero_()
@@ -213,13 +216,18 @@ def main():
 
             # rename moco pre-trained keys
             state_dict = checkpoint['state_dict']
-            
+
             for k in list(state_dict.keys()):
                 # retain only encoder up to before the embedding layer
                 if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
                     #pdb.set_trace()
                     # remove prefix
                     state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+                elif k.startswith('encoder_q') and not k.startswith('encoder_q.fc'):
+                    #pdb.set_trace()
+                    # remove prefix
+                    state_dict[k[len("encoder_q."):]] = state_dict[k]
+
                 # delete renamed or unused k
                 del state_dict[k]
             '''
@@ -248,7 +256,7 @@ def main():
     if args.resume:
         checkpoint = torch.load(args.resume)
         net.load_state_dict(checkpoint['model_state_dict'])
-        optimzier.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         last_epoch = checkpoint['epoch']
         last_loss = checkpoint['loss']
 
@@ -295,7 +303,7 @@ def main():
             optimizer.step()
             train_time = time.time()-end-data_time
             
-            if epoch%5==4:
+            if epoch%5==4 or True:  # @joshuafan always compute accuracy
                 score = torch.sigmoid(outputs).detach().cpu()            
                 average_precision = accuracy_score(labels.cpu(), torch.argmax(score,axis=1)) * 100.0
             else:

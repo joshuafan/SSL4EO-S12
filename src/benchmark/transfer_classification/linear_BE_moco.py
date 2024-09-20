@@ -17,6 +17,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import models
 
 ## change01 ##
+import collections
+collections.Iterable = collections.abc.Iterable  # @joshuafan - temporary workaround for deprecated library https://github.com/quandyfactory/dicttoxml/issues/91
 from cvtorchvision import cvtransforms
 import time
 import os
@@ -81,6 +83,10 @@ def init_distributed_mode(args):
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
 
+    # If using distributed, delete the communication file first if it exists
+    if os.path.isfile(args.dist_url.removeprefix('file://')):
+        os.remove(args.dist_url.removeprefix('file://'))
+        print("File existed", args.dist_url.removeprefix('file://'))
 
     # prepare distributed
     torch.distributed.init_process_group(
@@ -203,7 +209,7 @@ def main():
         train_dataset = random_subset(train_dataset,train_frac,seed)    
     ### dist ###    
     sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)    
-        
+
     train_loader = DataLoader(train_dataset,
                               batch_size=batch_size,
                               sampler = sampler,
@@ -227,10 +233,10 @@ def main():
 
     ## change 04 ##
     if args.backbone == 'resnet50':
-        net = models.resnet50(pretrained=False)
+        net = models.resnet50(weights=None)  # (pretrained=False)  @joshuafan removed deprecated "pretrained" param
         net.fc = torch.nn.Linear(2048,19)
     elif args.backbone == 'resnet18':
-        net = models.resnet18(pretrained=False)
+        net = models.resnet18(weights=None)  # (pretrained=False)
         net.fc = torch.nn.Linear(512,19)
         
     if args.bands=='all':
@@ -285,7 +291,7 @@ def main():
     net.cuda()
     #### nccl doesn't support wsl
     if args.is_slurm_job:
-        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[args.gpu_to_work_on],find_unused_parameters=True)
+        net = torch.nn.parallel.DistributedDataParallel(net,device_ids=[args.gpu_to_work_on])  # @joshuafan - set find_unused_parameters to False to avoid warning. ,find_unused_parameters=True)
         
         
     criterion = torch.nn.MultiLabelSoftMarginLoss()
@@ -349,7 +355,7 @@ def main():
             if epoch%5==4:
                 score = torch.sigmoid(outputs).detach()
                 #average_precision = average_precision_score(labels.cpu(), score, average='micro') * 100.0
-                average_precision = multilabel_average_precision(score, labels, num_labels=19, average="micro") * 100.0
+                average_precision = multilabel_average_precision(score, labels.long(), num_labels=19, average="micro") * 100.0  # @joshuafan modified
             else:
                 average_precision = 0
             score_time = time.time()-end-data_time-train_time
@@ -400,7 +406,7 @@ def main():
                     loss_val = criterion(outputs_val, labels_val.long())
                     score_val = torch.sigmoid(outputs_val).detach()
                     #average_precision_val = average_precision_score(labels_val.cpu(), score_val, average='micro') * 100.0
-                    average_precision_val = multilabel_average_precision(score_val, labels_val, num_labels=19, average="micro") * 100.0
+                    average_precision_val = multilabel_average_precision(score_val, labels_val.long(), num_labels=19, average="micro") * 100.0  # @joshuafan modified
                        
 
                     count_val += 1

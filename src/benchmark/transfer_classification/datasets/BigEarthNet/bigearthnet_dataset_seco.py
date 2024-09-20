@@ -215,7 +215,7 @@ class Bigearthnet(Dataset):
 if __name__ == '__main__':
     import os
     import argparse
-    from bigearthnet_dataset_seco_lmdb import make_lmdb
+    from bigearthnet_dataset_seco_lmdb_s2_uint8 import make_lmdb
     import time
     import torch
     from torchvision import transforms
@@ -227,12 +227,17 @@ if __name__ == '__main__':
     parser.add_argument('--save_dir', type=str, default='/mnt/d/codes/SSL_examples/datasets/BigEarthNet/dataload_op1_lmdb')
     parser.add_argument('--make_lmdb_dataset', type=bool, default=False)
     parser.add_argument('--download', type=bool, default=False)
+    parser.add_argument('--num_workers', type=int, default=-1)
+
     args = parser.parse_args()
 
     make_lmdb_dataset = args.make_lmdb_dataset
     all_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
     RGB_bands = ['B04', 'B03', 'B02']
     test_loading_time = True
+    if args.num_workers == -1:
+        args.num_workers = torch.get_num_threads()
+        print(f"Num workers not specified, inferred {args.num_workers} from torch.get_num_threads()")
     
     if make_lmdb_dataset:
     
@@ -240,18 +245,32 @@ if __name__ == '__main__':
         train_dataset = Bigearthnet(
             root=args.data_dir,
             split='train',
-            bands=all_bands
+            bands=all_bands,
+            download=args.download
         )
     
-        make_lmdb(train_dataset, lmdb_file=os.path.join(args.save_dir, 'train_B12.lmdb'))
+        make_lmdb(train_dataset, lmdb_file=os.path.join(args.save_dir, 'train_B12.lmdb'), num_workers=args.num_workers)
 
         val_dataset = Bigearthnet(
             root=args.data_dir,
             split='val',
-            bands=all_bands
+            bands=all_bands,
+            download=args.download
         )
 
-        make_lmdb(val_dataset, lmdb_file=os.path.join(args.save_dir, 'val_B12.lmdb'))
+        make_lmdb(val_dataset, lmdb_file=os.path.join(args.save_dir, 'val_B12.lmdb'), num_workers=args.num_workers)
+
+        # @joshuafan: added test split.
+        test_dataset = Bigearthnet(
+            root=args.data_dir,
+            split='test',
+            bands=all_bands,
+            download=args.download
+        )
+
+        make_lmdb(test_dataset, lmdb_file=os.path.join(args.save_dir, 'test_B12.lmdb'), num_workers=args.num_workers)
+
+
         print('LMDB dataset created: %s seconds.' % (time.time()-start_time))
 
     '''
