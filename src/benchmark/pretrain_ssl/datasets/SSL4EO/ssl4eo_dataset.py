@@ -54,7 +54,10 @@ class SSL4EO(torch.utils.data.Dataset):
         self.length = len(self.ids)
 
     def __getitem__(self,index):
-        
+        """
+        Returns a tuple of the S1, S2A, S2C images at the given index.
+        If not all are specified in 'self.mode', returns None for the ones that are not needed.
+        """
         if 's1' in self.mode:
             img_s1_4s = self.get_array(self.ids[index], 's1') # [4,2,264,264] float32 or uint8                
         else:
@@ -106,9 +109,18 @@ class SSL4EO(torch.utils.data.Dataset):
 
                 chs.append(ch)
             img = np.stack(chs, axis=0) # [C,264,264]
+            # print("SSL4EO get_array img", img.shape, img.dtype, "Means", np.mean(img, axis=(1,2)), "Stds", np.std(img, axis=(1,2)))
             seasons.append(img)
         img_4s = np.stack(seasons, axis=0) # [4,C,264,264]
 
+        # TODO: If the original images are uint16, we can either:
+        # 1) Save the raw values (uint16)
+        # 2) Convert it to uint8 by dividing by 10000 and multiplying 255. NOT SUPPORTED NOW.
+        # 3) If normalize is True, convert it to uint8 by scaling to the range
+        #    [0, 1] where mean-2*std gets mapped to 0, and mean+2*std gets mapped
+        #    to 1. Then multiply by 255.
+        # On the other hand, if the original images are uint8 (normalized),
+        # we should just save the raw values.
         if self.normalize:
             return img_4s
         elif self.dtype=='uint8':
@@ -187,14 +199,26 @@ def make_lmdb(dataset, lmdb_file, num_workers=6,mode=['s1','s2a','s2c']):
     env = lmdb.open(lmdb_file, map_size=1099511627776*2)
     txn = env.begin(write=True)
     for index, (s1, s2a, s2c) in tqdm(enumerate(loader), total=len(dataset), desc='Creating LMDB'):
-        if index == 0:  # and mode == ['s1', 's2a', 's2c']:
+        if index < 5:  # and mode == ['s1', 's2a', 's2c']:
             print("Datatype check")  # Should be [season, C, H, W]
+
+            def print_band_stats(img):
+                """Prints band stats, assuming image is of shape [time, channel, height, width]"""
+                print("Shape", img.shape, "Dtype", img.dtype)
+                print("Mean", np.mean(img, axis=(0, 2, 3)),
+                      "Std", np.std(img, axis=(0, 2, 3)),
+                      "Min", np.min(img, axis=(0, 2, 3)),
+                      "Max", np.max(img, axis=(0, 2, 3)))
+
             if 's1' in mode:
-                print("S1", s1.shape, s1.dtype, s1.min(), s1.mean(), s1.max())
+                print("S1")
+                print_band_stats(s1)
             if 's2a' in mode:
-                print("S2a", s2a.shape, s2a.dtype, s2a.min(), s2a.mean(), s2a.max())
+                print("S2a")
+                print_band_stats(s2a)
             if 's2c' in mode:
-                print("S2c", s2c.shape, s2c.dtype, s2c.min(), s2c.mean(), s2c.max())
+                print("S2c")
+                print_band_stats(s2c)
 
         if 's1' in mode:
             sample_s1 = np.array(s1)

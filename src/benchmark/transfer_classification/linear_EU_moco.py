@@ -3,6 +3,7 @@
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
+import torchgeo
 from torchvision import models
 
 ## change01 ##
@@ -17,9 +18,11 @@ from sklearn.metrics import accuracy_score
 import numpy as np
 import argparse
 import builtins
+import timm
 
 from datasets.EuroSat.eurosat_dataset import EurosatDataset,Subset
 from sklearn.model_selection import train_test_split
+from torchgeo.models import ResNet18_Weights, ResNet50_Weights, ViTSmall16_Weights
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -70,7 +73,6 @@ def init_distributed_mode(args):
         # read environment variables
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ["WORLD_SIZE"])
-
 
     # prepare distributed
     torch.distributed.init_process_group(
@@ -130,7 +132,7 @@ def main():
     seed = args.seed
 
     if args.rank==0 and not os.path.isdir(args.checkpoints_dir):
-        os.mkdir(args.checkpoints_dir)
+        os.makedirs(args.checkpoints_dir, exist_ok=True)
     if args.rank==0:
         tb_writer = SummaryWriter(os.path.join(args.checkpoints_dir,'log'))
 
@@ -185,63 +187,83 @@ def main():
     
     print('train_len: %d val_len: %d' % (len(train_dataset),len(val_dataset)))
 
+
     ## change 04 ##
-    if args.backbone == 'resnet50':
-        # net = models.__dict__[args.backbone](num_classes=128)
-        net = models.resnet50(pretrained=False)
-        net.fc = torch.nn.Linear(2048,10)
-    elif args.backbone == 'resnet18':
-        # net = models.__dict__[args.backbone](num_classes=128)
-        net = models.resnet18(pretrained=False)
-        net.fc = torch.nn.Linear(512,10)
-    if args.bands=='B13':    
-        net.conv1 = torch.nn.Conv2d(13, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-    elif args.bands=='B12':
-        net.conv1 = torch.nn.Conv2d(12, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-
-    
-    for name, param in net.named_parameters():
-        if name not in ['fc.weight','fc.bias']:
-            param.requires_grad = False
-
-    net.fc.weight.data.normal_(mean=0.0,std=0.01)
-    net.fc.bias.data.zero_()
-
-
-    # load from pre-trained, before DistributedDataParallel constructor
-    if args.pretrained:
-        if os.path.isfile(args.pretrained):
-            print("=> loading checkpoint '{}'".format(args.pretrained))
-            checkpoint = torch.load(args.pretrained, map_location="cpu")
-
-            # rename moco pre-trained keys
-            state_dict = checkpoint['state_dict']
-
-            for k in list(state_dict.keys()):
-                # retain only encoder up to before the embedding layer
-                if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
-                    #pdb.set_trace()
-                    # remove prefix
-                    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
-                elif k.startswith('encoder_q') and not k.startswith('encoder_q.fc'):
-                    #pdb.set_trace()
-                    # remove prefix
-                    state_dict[k[len("encoder_q."):]] = state_dict[k]
-
-                # delete renamed or unused k
-                del state_dict[k]
-            '''
-            # remove prefix
-            state_dict = {k.replace("module.", ""): v for k,v in state_dict.items()}
-            '''
-            #args.start_epoch = 0
-            msg = net.load_state_dict(state_dict, strict=False)
-            #pdb.set_trace()
-            assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
-
-            print("=> loaded pre-trained model '{}'".format(args.pretrained))
+    if args.pretrained == "torchgeo_moco":
+        # Load TorchGeo-packaged model, https://torchgeo.readthedocs.io/en/stable/tutorials/pretrained_weights.html
+        if args.backbone == 'resnet50':
+            weights = ResNet50_Weights.SENTINEL2_ALL_MOCO
+            in_chans = weights.meta['in_chans']
+            net = timm.create_model('resnet50', in_chans=in_chans, num_classes=10)
+            net.load_state_dict(weights.get_state_dict(progress=True), strict=False)
+        elif args.backbone == 'resnet18':
+            weights = ResNet18_Weights.SENTINEL2_ALL_MOCO
+            in_chans = weights.meta['in_chans']
+            net = timm.create_model('resnet18', in_chans=in_chans, num_classes=10)
+            net.load_state_dict(weights.get_state_dict(progress=True), strict=False)
         else:
-            print("=> no checkpoint found at '{}'".format(args.pretrained))
+            raise ValueError("If using --pretraind torchgeo_moco, backbone must be resnet18 or resnet50")
+
+        # From SSL4EO repo, not sure if necessary
+        net.fc.weight.data.normal_(mean=0.0,std=0.01)
+        net.fc.bias.data.zero_()
+    else:
+        # Existing code from SSL4EO repo
+        # Set up un-initialized model
+        if args.backbone == 'resnet50':
+            net = models.resnet50(pretrained=False)
+            net.fc = torch.nn.Linear(2048,10)
+        elif args.backbone == 'resnet18':
+            net = models.resnet18(pretrained=False)
+            net.fc = torch.nn.Linear(512,10)
+        if args.bands=='B13':    
+            net.conv1 = torch.nn.Conv2d(13, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        elif args.bands=='B12':
+            net.conv1 = torch.nn.Conv2d(12, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+
+        # # TODO Make this a cmdline argument
+        # for name, param in net.named_parameters():
+        #     if name not in ['fc.weight','fc.bias']:
+        #         param.requires_grad = False
+
+        net.fc.weight.data.normal_(mean=0.0,std=0.01)
+        net.fc.bias.data.zero_()
+
+
+        # load from pre-trained, before DistributedDataParallel constructor
+        if args.pretrained:
+            if os.path.isfile(args.pretrained):
+                print("=> loading checkpoint '{}'".format(args.pretrained))
+                checkpoint = torch.load(args.pretrained, map_location="cpu")
+
+                # rename moco pre-trained keys
+                state_dict = checkpoint['state_dict']
+
+                for k in list(state_dict.keys()):
+                    # retain only encoder up to before the embedding layer
+                    if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
+                        #pdb.set_trace()
+                        # remove prefix
+                        state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+                    elif k.startswith('encoder_q') and not k.startswith('encoder_q.fc'):
+                        #pdb.set_trace()
+                        # remove prefix
+                        state_dict[k[len("encoder_q."):]] = state_dict[k]
+
+                    # delete renamed or unused k
+                    del state_dict[k]
+                '''
+                # remove prefix
+                state_dict = {k.replace("module.", ""): v for k,v in state_dict.items()}
+                '''
+                #args.start_epoch = 0
+                msg = net.load_state_dict(state_dict, strict=False)
+                #pdb.set_trace()
+                assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
+
+                print("=> loaded pre-trained model '{}'".format(args.pretrained))
+            else:
+                print("=> no checkpoint found at '{}'".format(args.pretrained))
 
     # convert batch norm layers (if any)
     if args.is_slurm_job:

@@ -15,6 +15,11 @@ S2A_MEAN = [752.40087073, 884.29673756, 1144.16202635, 1297.47289228, 1624.90992
 
 S2A_STD = [1108.02887453, 1155.15170768, 1183.6292542, 1368.11351514, 1370.265037, 1355.55390699, 1416.51487101, 1474.78900051, 1439.3086061, 1582.28010962, 1455.52084939, 1343.48379601]
 
+S2C_MEAN = [1605.57504906, 1390.78157673, 1314.8729939, 1363.52445545, 1549.44374991, 2091.74883118, 2371.7172463, 2299.90463006, 2560.29504086, 830.06605044, 22.10351321, 2177.07172323, 1524.06546312]
+
+S2C_STD = [786.78685367, 850.34818441, 875.06484736, 1138.84957046, 1122.17775652, 1161.59187054, 1274.39184232, 1248.42891965, 1345.52684884, 577.31607053, 51.15431158, 1336.09932639, 1136.53823676]
+
+
 def normalize(img, mean, std):
     min_value = mean - 2 * std
     max_value = mean + 2 * std
@@ -137,8 +142,12 @@ class LMDBDataset(Dataset):
 
         #sample_s2_bytes, sample_s2_shape, sample_s1_bytes, sample_s1_shape, target_bytes = pickle.loads(data)
         sample_s2_bytes, sample_s2_shape, target_bytes = pickle.loads(data)  # Shape should be [128, 128, 12] (H,W,C)
-        sample = np.frombuffer(sample_s2_bytes, dtype=np.int16).reshape(sample_s2_shape).copy()  # TODO check that int16 is correct  @joshuafan - changed to int16, copied to new writable array
+        sample = np.frombuffer(sample_s2_bytes, dtype=np.int16).reshape(sample_s2_shape).astype(np.float32)  # TODO check that int16 is correct  @joshuafan - changed to int16, copied to new writable array
+        sample = np.clip(sample / 10000.0, 0, 1)
         #sample_s1 = np.frombuffer(sample_s1_bytes, dtype=np.float32).reshape(sample_s1_shape)
+        # TODO Normalize sample according to the SSL4EO means
+        # for channel_idx in sample.shape[2]:
+        #     sample[:, :, channel_idx] = normalize(sample[:, :, channel_idx], S2C_MEAN[channel_idx], S2C_STD[channel_idx])
 
         target = np.frombuffer(target_bytes, dtype=np.float32).copy()  # dtype=np.float32).copy()  # TODO check this @joshuafan changed to int
 

@@ -107,7 +107,7 @@ class EurosatDataset(Dataset):
             if self.normalize:
                 ch = normalize(ch, mean=BAND_STATS['mean'][b], std=BAND_STATS['std'][b])
             else:
-                ch = (ch / 10000.0 * 255.0).astype('uint8')
+                ch = ch  # (ch / 10000.0 * 255.0).astype('uint8')
 
             if b=='B8A': # EuSAT band order is different than SSL4EO
                 channels.insert(8,ch)

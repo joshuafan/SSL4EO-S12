@@ -26,8 +26,43 @@ def normalize(img, mean, std):
     img = (img - min_value) / (max_value - min_value) * 255.0
     img = np.clip(img, 0, 255).astype(np.uint8)
     return img
-    
-    
+
+
+def normalize_img(img, means, stds):
+    """
+    Normalize image of shape [C,H,W].
+    Input is unbounded float32 Numpy, output is uint8 Numpy, range [0, 255].
+    """
+    min_values = (means - 2 * stds)[:, None, None]  # add extra dimensions to make broadcasting work
+    max_values = (means + 2 * stds)[:, None, None]
+    img = (img - min_values) / (max_values - min_values) * 255.0
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return img
+
+
+def denormalize_img(img, means, stds):
+    """
+    Converts a normalized uint8 Numpy array in the range [0, 255] into a 
+    denormalized float32 Numpy array, with raw intensity values from Sentinel
+    (divided by 10000 and clipped to [0, 1]).
+
+    The input is assumed to have been normalized by the 'normalize' method for each
+    channel, with the given mean/std.
+
+    Input and output should have shape [C, H, W]. means/stds should be lists or 
+    Numpy arrays of length [C].
+    """
+    if type(means) is list:
+        means = np.array(means, dtype=np.float32)
+    if type(stds) is list:
+        stds = np.array(stds, dtype=np.float32)
+
+    min_values = (means - 2 * stds)[:, None, None]  # add extra dimensions to make broadcasting work
+    max_values = (means + 2 * stds)[:, None, None]
+    denormalized_img = (img.astype(np.float32) / 255.0) * (max_values - min_values) + min_values
+    denormalized_img = np.clip(denormalized_img / 10000.0, 0, 1)
+    return denormalized_img
+
 
 class Subset(Dataset):
 
@@ -150,6 +185,15 @@ class LMDBDataset(Dataset):
             self.length = txn.stat()['entries']
 
     def __getitem__(self, index):
+        """
+        For each specified mode, returns:
+        - If transform is None, a Numpy array [T, C, H, W]
+        - If transform is provided, a Tensor [T, C, H, W] or whatever the output of the transform is.
+
+        If dtype is uint8, we assume raw files are normalized uint8 (range [0, 255]).
+        Otherwise, we assume raw files are int16 (Sentinel-2) or float32 (Sentinel-1).
+        In either case, we denormalize images to their original scale (0-10000+), divide by 10000, and clip to [0, 1].
+        """
         if self.is_slurm_job:
             # Delay loading LMDB data until after initialization
             if self.env is None:
@@ -162,7 +206,9 @@ class LMDBDataset(Dataset):
         if self.mode==['s1']:
             s1_bytes, s1_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
+                # sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape)  # [T, C, H, W], Numpy uint8 normalized
+                sample_s1 = denormalize_img(sample_s1, S1_MEAN, S1_STD)
             else:
                 sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
             if self.s1_transform is not None:
@@ -173,7 +219,9 @@ class LMDBDataset(Dataset):
         if self.mode==['s2a']:
             s2a_bytes, s2a_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape).astype(np.float32) / 255.0
+                # sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape).astype(np.float32) / 255.0
+                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape)  # [T, C, H, W], Numpy uint8 normalized
+                sample_s2a = denormalize_img(sample_s2a, S2A_MEAN, S2A_STD)
             else:
                 sample_s2a = np.frombuffer(s2a_bytes, dtype=np.int16).reshape(s2a_shape)
                 sample_s2a = (sample_s2a / 10000.0).astype(np.float32)
@@ -185,7 +233,9 @@ class LMDBDataset(Dataset):
         if self.mode==['s2c']:
             s2c_bytes, s2c_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
+                # sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape)  # [T, C, H, W], Numpy uint8 normalized
+                sample_s2c = denormalize_img(sample_s2c, S2C_MEAN, S2C_STD)
             else:
                 sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
                 sample_s2c = (sample_s2c / 10000.0).astype(np.float32)
@@ -198,8 +248,10 @@ class LMDBDataset(Dataset):
             s1_bytes, s1_shape, s2c_bytes, s2c_shape = pickle.loads(data)
 
             if self.dtype=='uint8':
-                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
-                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape)  # [T, C, H, W], Numpy uint8 normalized
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape)
+                sample_s1 = denormalize_img(sample_s1, S1_MEAN, S1_STD)
+                sample_s2c = denormalize_img(sample_s2c, S2C_MEAN, S2C_STD)
             else:
                 sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
                 sample_s2c = np.frombuffer(s2c_bytes, dtype=np.int16).reshape(s2c_shape)
@@ -216,11 +268,12 @@ class LMDBDataset(Dataset):
         if self.mode==['s1','s2a','s2c']:    
             s1_bytes, s1_shape, s2a_bytes, s2a_shape, s2c_bytes, s2c_shape = pickle.loads(data)
             if self.dtype=='uint8':
-                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape).astype(np.float32) / 255.0
-                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape).astype(np.float32) / 255.0
-                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape).astype(np.float32) / 255.0
-                # sample_s2a = (sample_s2a * 255).astype(np.uint8)
-                # sample_s2c = (sample_s2c * 255).astype(np.uint8)
+                sample_s1 = np.frombuffer(s1_bytes, dtype=np.uint8).reshape(s1_shape)  # [T, C, H, W], uint8 normalized
+                sample_s2a = np.frombuffer(s2a_bytes, dtype=np.uint8).reshape(s2a_shape)
+                sample_s2c = np.frombuffer(s2c_bytes, dtype=np.uint8).reshape(s2c_shape)
+                sample_s1 = denormalize_img(sample_s1, S1_MEAN, S1_STD)
+                sample_s2a = denormalize_img(sample_s2a, S2A_MEAN, S2A_STD)
+                sample_s2c = denormalize_img(sample_s2c, S2C_MEAN, S2C_STD)
             else:
                 sample_s1 = np.frombuffer(s1_bytes, dtype=np.float32).reshape(s1_shape)
                 sample_s2a = np.frombuffer(s2a_bytes, dtype=np.int16).reshape(s2a_shape)

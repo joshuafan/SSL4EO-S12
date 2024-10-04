@@ -198,9 +198,12 @@ def main():
     args.is_slurm_job = "SLURM_JOB_ID" in os.environ
     if args.is_slurm_job:
         args.rank = int(os.environ["SLURM_PROCID"])
-        args.world_size = int(os.environ["SLURM_NNODES"]) * int(
-            os.environ["SLURM_TASKS_PER_NODE"][0]
-        )
+        args.world_size = int(os.environ["SLURM_NNODES"])
+        # @joshuafan: do not multiply by SLURM_TASKS_PER_NODE since
+        # this should be equal to the number of GPUs.
+        # args.world_size = int(os.environ["SLURM_NNODES"]) * int(
+        #    os.environ["SLURM_TASKS_PER_NODE"][0]
+        #)
 
 
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
@@ -222,6 +225,9 @@ def main():
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
+
+        # @joshuafan Removed below line as world_size should already be equal to the number of gpus
+        # if ntasks-per-node is set correctly in the slurm script.
         args.world_size = ngpus_per_node * args.world_size
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
@@ -237,10 +243,10 @@ def main_worker(gpu_num, ngpus_per_node, args):
 
     # suppress printing if not master
     if args.multiprocessing_distributed and args.gpu != 0 or (args.is_slurm_job and args.rank != 0):
-        print("Got inside the if statement", gpu, args.rank)
-        # def print_pass(*args):
-        #     pass
-        # builtins.print = print_pass
+        print("Suppressing printing for gpu", gpu)
+        def print_pass(*args):
+            pass
+        builtins.print = print_pass
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -254,10 +260,14 @@ def main_worker(gpu_num, ngpus_per_node, args):
             # global rank among all the processes
             args.rank = args.rank * ngpus_per_node + gpu
 
+        print(f"About to init process group. Backend {args.dist_backend}, init_method {args.dist_url}, world_size {args.world_size}, rank {args.rank}, gpu {gpu}")
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+        print(f"Finished init process group. Backend {args.dist_backend}, init_method {args.dist_url}, world_size {args.world_size}, rank {args.rank}, gpu {gpu}")
 
     print("gpu_num", gpu_num, "gpu", args.gpu, "cudavisibledevices",  os.environ["CUDA_VISIBLE_DEVICES"], "args.rank", args.rank)
+    with open(f"/mnt/beegfs/bulk/mirror/jyf6/datasets/geospatial/SSL4EO-S12/src/benchmark/pretrain_ssl/test_{args.gpu}.txt", "w") as f:
+        f.write("Just making sure file works")
 
     # create tb_writer
     if args.rank==0 and not os.path.isdir(args.checkpoints):
@@ -291,7 +301,7 @@ def main_worker(gpu_num, ngpus_per_node, args):
             model.cuda()
             print("model.cuda() finished")
             sys.stdout.flush()
-            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu_to_work_on], output_device=[args.gpu_to_work_on])   
+            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu_to_work_on])  # output_device=[args.gpu_to_work_on])   
             print('model distributed.')
             sys.stdout.flush()     
         elif args.gpu is not None:
@@ -320,6 +330,9 @@ def main_worker(gpu_num, ngpus_per_node, args):
         # AllGather implementation (batch shuffle, queue update, etc.) in
         # this code only supports DistributedDataParallel.
         raise NotImplementedError("Only DistributedDataParallel is supported.")
+
+    with open(f"/mnt/beegfs/bulk/mirror/jyf6/datasets/geospatial/SSL4EO-S12/src/benchmark/pretrain_ssl/test_{args.gpu}.txt", "a+") as f:
+        f.write("TEST - about to start training")
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -466,10 +479,11 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output
-        # print("images shape", images[0].shape, images[1].shape)
         output, target = model(im_q=images[0], im_k=images[1])
-        # print("output", output.shape, "target", target.shape)
-        # sys.stdout.flush()
+        if i == 1:
+            print("images shape", images[0].shape, images[1].shape, "Channel means", images[0].mean(dim=(0,2,3)))
+            print("output", output.shape, "target", target.shape)
+            sys.stdout.flush()
         loss = criterion(output, target)
 
         # acc1/acc5 are (K+1)-way contrast classifier accuracy
@@ -490,6 +504,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
+            sys.stdout.flush()
+
     '''
     if args.rank==0:    
         tb_writer.add_scalar('loss',losses.avg,global_step=epoch,walltime=None)
